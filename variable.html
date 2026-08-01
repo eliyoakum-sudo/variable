@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Variable Interpreter</title>
+  <style>
+    :root {
+      --bg-color: #0f172a;
+      --panel-bg: #1e293b;
+      --accent: #38bdf8;
+      --text: #f8fafc;
+      --border: #334155;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text);
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Left Control Panel */
+    #sidebar {
+      width: 380px;
+      background: var(--panel-bg);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      padding: 20px;
+      gap: 12px;
+      z-index: 10;
+      box-shadow: 5px 0 15px rgba(0,0,0,0.3);
+      overflow-y: auto;
+    }
+
+    h1 {
+      font-size: 1.2rem;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .instructions {
+      font-size: 0.8rem;
+      color: #94a3b8;
+      line-height: 1.4;
+      background: #0f172a;
+      padding: 10px;
+      border-radius: 6px;
+    }
+
+    textarea {
+      width: 100%;
+      height: 180px;
+      background: #0f172a;
+      border: 1px solid var(--border);
+      color: #7dd3fc;
+      font-family: 'Courier New', Courier, monospace;
+      padding: 10px;
+      border-radius: 6px;
+      resize: vertical;
+      font-size: 0.95rem;
+    }
+
+    textarea:focus {
+      outline: 1px solid var(--accent);
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 10px;
+    }
+
+    button {
+      flex: 1;
+      padding: 10px;
+      background: var(--accent);
+      color: #0f172a;
+      font-weight: bold;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    button:hover {
+      filter: brightness(1.1);
+      transform: translateY(-1px);
+    }
+
+    button.secondary {
+      background: #475569;
+      color: var(--text);
+    }
+
+    #output {
+      flex: 1;
+      min-height: 100px;
+      background: #0f172a;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      font-family: 'Courier New', Courier, monospace;
+      color: #a7f3d0;
+      white-space: pre-wrap;
+      overflow-y: auto;
+      font-size: 0.85rem;
+    }
+
+    .footer-credit {
+      margin-top: auto;
+      font-size: 0.8rem;
+      color: #64748b;
+      text-align: center;
+      padding-top: 10px;
+    }
+
+    /* Right 3D Canvas Area */
+    #canvas-container {
+      flex: 1;
+      position: relative;
+    }
+
+    #info-overlay {
+      position: absolute;
+      top: 15px;
+      right: 15px;
+      background: rgba(30, 41, 59, 0.8);
+      backdrop-filter: blur(4px);
+      padding: 10px 15px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      border: 1px solid var(--border);
+      pointer-events: none;
+    }
+  </style>
+  <!-- Three.js and OrbitControls -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+  <div id="sidebar">
+    <h1>Variable Interpreter</h1>
+    
+    <div class="instructions">
+      <strong>Format:</strong> <code>[Value/Cmd][Row][Col][Layer]</code><br>
+      • <strong>Rows/Cols/Layers:</strong> 1 to 9 (Bottom: 1, Top: 9)<br>
+      • <code>1-9NNN</code>: Add digit to cell<br>
+      • <code>SNNN</code>: Subtract value | <code>CNNN</code>: Clear cell<br>
+      • <code>DNNN</code>: Decrement cell by 1<br>
+      • <code>JNNN / KNNN</code>: Jump loop if non-zero<br>
+      • <code>MNNN / PNNN</code>: Mark source / Paste cell value<br>
+      • <code>ONNN</code>: Output Char | <code>UNNN</code>: Output Num<br>
+      • <code>RNNN</code>: Read user input into cell<br>
+      • <code>0000</code>: Full ASCII output sweep (L9 &rarr; L1)
+    </div>
+
+    <textarea id="code" placeholder="Enter code here...&#10;e.g.,&#10;7111&#10;2111&#10;O111&#10;0000">7111
+2111
+O111
+0000</textarea>
+
+    <div class="btn-group">
+      <button onclick="runCode()">Run Code</button>
+      <button class="secondary" onclick="resetGrid()">Reset Grid</button>
+    </div>
+
+    <div id="output" placeholder="Execution output will appear here..."></div>
+
+    <div class="footer-credit">Variable created by Eli Yoakum</div>
+  </div>
+
+  <div id="canvas-container">
+    <div id="info-overlay">Drag to Rotate | Scroll to Zoom</div>
+  </div>
+
+  <script>
+    const CUBE_SIZE = 9;
+
+    // Grid Memory State: memory[row][col][layer] (1-indexed)
+    let memory = {};
+    let markedCell = null; // Stores coordinates {r, c, l} for M/P operations
+
+    function clearMemory() {
+      memory = {};
+      markedCell = null;
+      for (let r = 1; r <= CUBE_SIZE; r++) {
+        memory[r] = {};
+        for (let c = 1; c <= CUBE_SIZE; c++) {
+          memory[r][c] = {};
+          for (let l = 1; l <= CUBE_SIZE; l++) {
+            memory[r][c][l] = 0;
+          }
+        }
+      }
+    }
+    clearMemory();
+
+    // Setup Three.js Scene
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0f172a);
+
+    const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+    camera.position.set(18, 20, 24);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    container.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    // Lights
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+    scene.add(ambientLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(15, 30, 15);
+    scene.add(dirLight);
+
+    // Grid group to hold Variable elements
+    const cubeGroup = new THREE.Group();
+    scene.add(cubeGroup);
+
+    // Helper to calculate 3D coordinates based on Row, Col, Layer
+    function getCellPosition(r, c, l) {
+      const spacing = 1.2;
+      const offset = (CUBE_SIZE + 1) / 2; // Center offset for Variable grid
+      const x = (c - offset) * spacing;   // Column: Left to Right
+      const y = (l - offset) * spacing;   // Layer: Bottom to Top
+      const z = (r - offset) * spacing;   // Row: Back to Front
+      return { x, y, z };
+    }
+
+    // Dynamic Canvas Texture Generator for Text Labels on Cubes
+    function createTextTexture(text) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 128;
+      canvas.height = 128;
+      const ctx = canvas.getContext('2d');
+
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(0, 0, 128, 128);
+
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 8;
+      ctx.strokeRect(0, 0, 128, 128);
+
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = 'bold 50px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, 64, 64);
+
+      return new THREE.CanvasTexture(canvas);
+    }
+
+    // Render the Variable grid wireframes and memory blocks
+    function updateVisualizer() {
+      while (cubeGroup.children.length > 0) {
+        cubeGroup.remove(cubeGroup.children[0]);
+      }
+
+      const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+
+      for (let r = 1; r <= CUBE_SIZE; r++) {
+        for (let c = 1; c <= CUBE_SIZE; c++) {
+          for (let l = 1; l <= CUBE_SIZE; l++) {
+            const { x, y, z } = getCellPosition(r, c, l);
+            const val = memory[r][c][l];
+
+            // Outer Wireframe Grid Box
+            const wireGeo = new THREE.EdgesGeometry(boxGeo);
+            const wireMat = new THREE.LineBasicMaterial({ color: 0x334155, linewidth: 1 });
+            const wireframe = new THREE.LineSegments(wireGeo, wireMat);
+            wireframe.position.set(x, y, z);
+            cubeGroup.add(wireframe);
+
+            // Active visual block if cell has a value
+            if (val > 0) {
+              const texture = createTextTexture(val.toString());
+              const mat = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.3 });
+              const mesh = new THREE.Mesh(boxGeo, mat);
+              mesh.position.set(x, y, z);
+              mesh.scale.set(0.9, 0.9, 0.9);
+              cubeGroup.add(mesh);
+            }
+          }
+        }
+      }
+    }
+
+    // Interpreter Core Logic
+    function runCode() {
+      clearMemory();
+      const code = document.getElementById('code').value;
+      const rawLines = code.split('\n');
+      const outputEl = document.getElementById('output');
+      let consoleLogs = [];
+
+      // Pre-filter valid instructions
+      let instructions = [];
+      rawLines.forEach((lineRaw, origLineIdx) => {
+        const line = lineRaw.trim();
+        if (line) {
+          instructions.push({ text: line, lineNum: origLineIdx + 1 });
+        }
+      });
+
+      let pc = 0; // Program Counter
+      let executionSteps = 0;
+      const MAX_STEPS = 500000; // Safeguard against infinite loops
+
+      while (pc < instructions.length) {
+        executionSteps++;
+        if (executionSteps > MAX_STEPS) {
+          consoleLogs.push(`[Execution Error]: Infinite loop limit reached (${MAX_STEPS} steps).`);
+          break;
+        }
+
+        const inst = instructions[pc];
+        const line = inst.text;
+        const lineNum = inst.lineNum;
+
+        // Full Cube ASCII Output Sweep (0000)
+        if (line === '0000') {
+          let str = "";
+          for (let layer = CUBE_SIZE; layer >= 1; layer--) {
+            for (let row = 1; row <= CUBE_SIZE; row++) {
+              for (let col = 1; col <= CUBE_SIZE; col++) {
+                const val = memory[row][col][layer];
+                str += val > 0 ? String.fromCharCode(val) : '\0';
+              }
+            }
+          }
+          consoleLogs.push(`[Full Cube Out]: ${str}`);
+        } else if (/^[1-9scdjkmpour]\d{3}$/i.test(line)) {
+          const cmdChar = line[0].toUpperCase();
+          const r = parseInt(line[1], 10);
+          const c = parseInt(line[2], 10);
+          const l = parseInt(line[3], 10);
+
+          if (r < 1 || r > CUBE_SIZE || c < 1 || c > CUBE_SIZE || l < 1 || l > CUBE_SIZE) {
+            consoleLogs.push(`[Line ${lineNum} Error]: Coordinates out of bounds -> ${line}`);
+            pc++;
+            continue;
+          }
+
+          // Digit Addition (1-9NNN)
+          if (/\d/.test(cmdChar)) {
+            const digit = parseInt(cmdChar, 10);
+            memory[r][c][l] += digit;
+          }
+          // Subtract (SNNN)
+          else if (cmdChar === 'S') {
+            let val = prompt(`Subtract amount for cell (${r},${c},${l}):`, "1");
+            let subAmount = parseInt(val, 10) || 0;
+            memory[r][c][l] -= subAmount;
+          }
+          // Clear (CNNN)
+          else if (cmdChar === 'C') {
+            memory[r][c][l] = 0;
+          }
+          // Decrement (DNNN)
+          else if (cmdChar === 'D') {
+            memory[r][c][l] -= 1;
+          }
+          // Jump Forward (JNNN)
+          else if (cmdChar === 'J') {
+            if (memory[r][c][l] !== 0) {
+              // Target KNNN must match same target address
+              let targetIdx = instructions.findIndex((item, i) => i > pc && item.text.toUpperCase() === `K${line.substring(1)}`);
+              if (targetIdx !== -1) {
+                pc = targetIdx;
+              } else {
+                consoleLogs.push(`[Line ${lineNum} Error]: No matching K${line.substring(1)} marker found.`);
+              }
+            }
+          }
+          // Jump Backward (KNNN)
+          else if (cmdChar === 'K') {
+            if (memory[r][c][l] !== 0) {
+              let targetIdx = -1;
+              for (let i = pc - 1; i >= 0; i--) {
+                if (instructions[i].text.toUpperCase() === `J${line.substring(1)}`) {
+                  targetIdx = i;
+                  break;
+                }
+              }
+              if (targetIdx !== -1) {
+                pc = targetIdx;
+              } else {
+                consoleLogs.push(`[Line ${lineNum} Error]: No matching J${line.substring(1)} loop start found.`);
+              }
+            }
+          }
+          // Mark Source (MNNN)
+          else if (cmdChar === 'M') {
+            markedCell = { r, c, l };
+          }
+          // Paste Target (PNNN)
+          else if (cmdChar === 'P') {
+            if (markedCell) {
+              memory[r][c][l] = memory[markedCell.r][markedCell.c][markedCell.l];
+            } else {
+              consoleLogs.push(`[Line ${lineNum} Warning]: Paste used before marking cell with M command.`);
+            }
+          }
+          // Output Single Cell ASCII (ONNN)
+          else if (cmdChar === 'O') {
+            const val = memory[r][c][l];
+            consoleLogs.push(`[Out ASCII (${r},${c},${l})]: ${String.fromCharCode(val)}`);
+          }
+          // Output Single Cell Number (UNNN)
+          else if (cmdChar === 'U') {
+            consoleLogs.push(`[Out Value (${r},${c},${l})]: ${memory[r][c][l]}`);
+          }
+          // Read Input (RNNN)
+          else if (cmdChar === 'R') {
+            let inputVal = prompt(`Enter numeric ASCII or integer for cell (${r},${c},${l}):`, "0");
+            if (inputVal !== null) {
+              let parsed = parseInt(inputVal, 10);
+              if (isNaN(parsed) && inputVal.length > 0) {
+                parsed = inputVal.charCodeAt(0);
+              }
+              memory[r][c][l] = parsed || 0;
+            }
+          }
+        } else {
+          consoleLogs.push(`[Line ${lineNum} Error]: Invalid Command -> "${line}"`);
+        }
+
+        pc++;
+      }
+
+      outputEl.innerText = consoleLogs.length ? consoleLogs.join('\n') : "Execution finished with no output.";
+      updateVisualizer();
+    }
+
+    function resetGrid() {
+      clearMemory();
+      document.getElementById('output').innerText = "Grid reset.";
+      updateVisualizer();
+    }
+
+    // Window Resize Handling
+    window.addEventListener('resize', () => {
+      camera.aspect = container.clientWidth / container.clientHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(container.clientWidth, container.clientHeight);
+    });
+
+    // Animation loop
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    // Initialization
+    updateVisualizer();
+    animate();
+  </script>
+</body>
+</html>
